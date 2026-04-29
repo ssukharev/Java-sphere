@@ -1,0 +1,16 @@
+app/MainController.class
+model/Bar.class
+model/BarType.class
+view/DomeViewer$1.class
+view/DomeViewer.class
+model/DomeModel.class
+export/ObjExporter.class
+generator/DomeGenerator.class
+model/MeshType.class
+model/Node3D.class
+view/GeometryUtils.class
+export/StlExporter.class
+model/DomeParameters.class
+export/CsvExporter.class
+app/MainApp.class
+model/Face.class

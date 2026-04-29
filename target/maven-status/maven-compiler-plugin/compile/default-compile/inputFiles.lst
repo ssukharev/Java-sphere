@@ -1,0 +1,15 @@
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/Bar.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/DomeModel.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/BarType.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/export/CsvExporter.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/app/MainApp.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/app/MainController.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/view/DomeViewer.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/Face.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/generator/DomeGenerator.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/export/StlExporter.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/export/ObjExporter.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/MeshType.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/view/GeometryUtils.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/DomeParameters.java
+/Users/zematuti/JavaProjects/sphere/src/main/java/model/Node3D.java
