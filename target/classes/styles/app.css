@@ -25,3 +25,32 @@
 .measurements-text {
     -fx-text-fill: #111111;
 }
+
+.mode-panel {
+    -fx-background-color: rgba(255, 255, 255, 0.95);
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(170, 180, 190, 0.90);
+    -fx-border-radius: 10;
+    -fx-padding: 6 10 6 10;
+}
+
+.mode-panel-title {
+    -fx-text-fill: #1f2937;
+    -fx-font-weight: 700;
+    -fx-font-size: 12px;
+}
+
+.mode-toggle {
+    -fx-background-color: #eef2f7;
+    -fx-text-fill: #111827;
+    -fx-background-radius: 14;
+    -fx-border-radius: 14;
+    -fx-border-color: #c7d2e0;
+    -fx-padding: 4 10 4 10;
+}
+
+.mode-toggle:selected {
+    -fx-background-color: #dbeafe;
+    -fx-border-color: #60a5fa;
+    -fx-text-fill: #0b4a9a;
+}

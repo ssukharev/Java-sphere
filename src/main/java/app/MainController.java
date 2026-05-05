@@ -27,10 +27,13 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.cell.CheckBoxTableCell;
 import javafx.scene.control.cell.ComboBoxTableCell;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
@@ -216,10 +219,44 @@ public class MainController {
         measurementsPane.setExpanded(false);
         measurementsPane.setCollapsible(true);
         measurementsPane.setMaxWidth(330);
-        StackPane viewerStack = new StackPane(domeViewer.getView(), measurementsPane);
+        VBox modePanel = buildModePanel();
+        modePanel.setMinWidth(340);
+        modePanel.setPrefWidth(340);
+        modePanel.setMaxWidth(340);
+        modePanel.setMinHeight(68);
+        modePanel.setPrefHeight(68);
+        modePanel.setMaxHeight(68);
+
+        StackPane viewerStack = new StackPane(domeViewer.getView(), modePanel, measurementsPane);
+        StackPane.setAlignment(modePanel, Pos.TOP_LEFT);
+        StackPane.setMargin(modePanel, new Insets(12, 0, 0, 12));
         StackPane.setAlignment(measurementsPane, Pos.TOP_RIGHT);
         StackPane.setMargin(measurementsPane, new Insets(12, 12, 0, 0));
         return viewerStack;
+    }
+
+    private VBox buildModePanel() {
+        Label title = new Label("Режим");
+        title.getStyleClass().add("mode-panel-title");
+
+        ToggleGroup modeGroup = new ToggleGroup();
+        HBox buttons = new HBox(6);
+
+        for (String modeName : List.of("План", "Каркас", "Схема", "Кровля", "Тент")) {
+            ToggleButton button = new ToggleButton(modeName);
+            button.getStyleClass().add("mode-toggle");
+            button.setToggleGroup(modeGroup);
+            button.setFocusTraversable(false);
+            buttons.getChildren().add(button);
+        }
+
+        if (!buttons.getChildren().isEmpty() && buttons.getChildren().get(0) instanceof ToggleButton firstButton) {
+            firstButton.setSelected(true);
+        }
+
+        VBox panel = new VBox(4, title, buttons);
+        panel.getStyleClass().add("mode-panel");
+        return panel;
     }
 
     private void addRow(GridPane grid, int row, String labelText, javafx.scene.Node field) {
