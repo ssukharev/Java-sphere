@@ -1,0 +1,27 @@
+.measurements-pane {
+    -fx-background-color: rgba(255, 255, 255, 0.95);
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(170, 180, 190, 0.90);
+    -fx-border-radius: 10;
+    -fx-text-fill: #111111;
+}
+
+.measurements-pane > .title {
+    -fx-background-color: rgba(246, 248, 252, 0.98);
+}
+
+.measurements-pane > .title > .text {
+    -fx-fill: #111111;
+}
+
+.measurements-pane .label {
+    -fx-text-fill: #111111;
+}
+
+.measurements-pane .content {
+    -fx-background-color: transparent;
+}
+
+.measurements-text {
+    -fx-text-fill: #111111;
+}
