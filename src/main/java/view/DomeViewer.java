@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -37,6 +38,8 @@ public class DomeViewer {
     private static final double MIN_CAMERA_Z = -10000;
     private static final double MAX_CAMERA_Z = -40;
     private static final double TARGET_MODEL_HALF_SIZE = 260;
+    private static final double DEFAULT_ROTATE_X = 0;
+    private static final double DEFAULT_ROTATE_Y = 0;
 
     private final StackPane root = new StackPane();
     private final Group world = new Group();
@@ -45,8 +48,8 @@ public class DomeViewer {
     private final Group nodesGroup = new Group();
     private final Group axesGroup = GeometryUtils.createAxes(250, 0.6);
 
-    private final Rotate rotateX = new Rotate(-25, Rotate.X_AXIS);
-    private final Rotate rotateY = new Rotate(-35, Rotate.Y_AXIS);
+    private final Rotate rotateX = new Rotate(DEFAULT_ROTATE_X, Rotate.X_AXIS);
+    private final Rotate rotateY = new Rotate(DEFAULT_ROTATE_Y, Rotate.Y_AXIS);
     private final Translate pan = new Translate();
     private final Scale scale = new Scale(1, 1, 1);
 
@@ -54,17 +57,25 @@ public class DomeViewer {
 
     private final PhongMaterial defaultBarMaterial = new PhongMaterial(Color.web("#7f8c8d"));
     private final PhongMaterial nodeMaterial = new PhongMaterial(Color.web("#111111"));
+    private final PhongMaterial nodeStartMaterial = new PhongMaterial(Color.web("#ffb400"));
+    private final PhongMaterial nodeTargetMaterial = new PhongMaterial(Color.web("#2ecc71"));
     private final PhongMaterial horizontalMaterial = new PhongMaterial(Color.web("#f39c12"));
     private final PhongMaterial radialMaterial = new PhongMaterial(Color.web("#27ae60"));
     private final PhongMaterial diagonalMaterial = new PhongMaterial(Color.web("#2980b9"));
     private final PhongMaterial baseMaterial = new PhongMaterial(Color.web("#c0392b"));
-    private final PhongMaterial selectedBarMaterial = new PhongMaterial(Color.web("#f1c40f"));
+    private final PhongMaterial selectedBarMaterial = new PhongMaterial(Color.web("#111111"));
 
     private DomeModel currentModel;
     private double currentBarRadius = 0.12;
     private boolean colorBars = true;
     private final Set<Integer> highlightedBarIds = new HashSet<>();
-    private Consumer<BarPickEvent> onBarDoubleClick;
+
+    private Consumer<BarPickEvent> onBarSelectClick;
+    private Consumer<NodeConnectEvent> onNodeConnect;
+
+    private Integer connectionStartNodeId;
+    private Integer connectionTargetNodeId;
+    private boolean connectionDragActive;
 
     private double dragAnchorX;
     private double dragAnchorY;
@@ -81,19 +92,36 @@ public class DomeViewer {
         world.getChildren().addAll(axesGroup, domeGroup);
 
         SubScene subScene = new SubScene(world, 900, 700, true, SceneAntialiasing.BALANCED);
-        subScene.setFill(Color.web("#f0f3f5"));
+        subScene.setFill(Color.web("#e9edf1"));
 
         camera.setNearClip(0.1);
         camera.setFarClip(50000);
         camera.setTranslateZ(-900);
         subScene.setCamera(camera);
 
-        AmbientLight ambientLight = new AmbientLight(Color.color(0.6, 0.6, 0.6));
-        PointLight pointLight = new PointLight(Color.WHITE);
-        pointLight.setTranslateX(-500);
-        pointLight.setTranslateY(-500);
-        pointLight.setTranslateZ(-500);
-        world.getChildren().addAll(ambientLight, pointLight);
+        AmbientLight ambientLight = new AmbientLight(Color.color(0.74, 0.74, 0.74));
+
+        PointLight keyLight = new PointLight(Color.color(0.72, 0.72, 0.72));
+        keyLight.setTranslateX(-650);
+        keyLight.setTranslateY(-450);
+        keyLight.setTranslateZ(-700);
+
+        PointLight fillLight = new PointLight(Color.color(0.38, 0.38, 0.38));
+        fillLight.setTranslateX(620);
+        fillLight.setTranslateY(-280);
+        fillLight.setTranslateZ(520);
+
+        world.getChildren().addAll(ambientLight, keyLight, fillLight);
+
+        softenMaterial(defaultBarMaterial);
+        softenMaterial(nodeMaterial);
+        softenMaterial(nodeStartMaterial);
+        softenMaterial(nodeTargetMaterial);
+        softenMaterial(horizontalMaterial);
+        softenMaterial(radialMaterial);
+        softenMaterial(diagonalMaterial);
+        softenMaterial(baseMaterial);
+        softenMaterial(selectedBarMaterial);
 
         setupMouseControls(subScene);
 
@@ -117,6 +145,9 @@ public class DomeViewer {
     public void clearModel() {
         currentModel = null;
         highlightedBarIds.clear();
+        connectionStartNodeId = null;
+        connectionTargetNodeId = null;
+        connectionDragActive = false;
         barsGroup.getChildren().clear();
         nodesGroup.getChildren().clear();
         scale.setX(1);
@@ -150,15 +181,19 @@ public class DomeViewer {
     }
 
     public void resetCamera() {
-        rotateX.setAngle(-25);
-        rotateY.setAngle(-35);
+        rotateX.setAngle(DEFAULT_ROTATE_X);
+        rotateY.setAngle(DEFAULT_ROTATE_Y);
         pan.setX(0);
         pan.setY(0);
         camera.setTranslateZ(-900);
     }
 
-    public void setOnBarDoubleClick(Consumer<BarPickEvent> onBarDoubleClick) {
-        this.onBarDoubleClick = onBarDoubleClick;
+    public void setOnBarSelectClick(Consumer<BarPickEvent> onBarSelectClick) {
+        this.onBarSelectClick = onBarSelectClick;
+    }
+
+    public void setOnNodeConnect(Consumer<NodeConnectEvent> onNodeConnect) {
+        this.onNodeConnect = onNodeConnect;
     }
 
     private void renderModel() {
@@ -210,7 +245,8 @@ public class DomeViewer {
             double radius = selected ? currentBarRadius * 1.35 : currentBarRadius;
             Cylinder cylinder = GeometryUtils.createConnectionCylinder(from, to, radius, material);
             if (cylinder != null) {
-                cylinder.setUserData(bar.getId());
+                cylinder.setOpacity(1.0);
+                cylinder.setUserData(new PickTag(PickType.BAR, bar.getId()));
                 barsGroup.getChildren().add(cylinder);
             }
         }
@@ -224,7 +260,19 @@ public class DomeViewer {
             if (point == null) {
                 continue;
             }
-            Sphere sphere = GeometryUtils.createNodeSphere(point, nodeRadius, nodeMaterial);
+
+            PhongMaterial material;
+            if (Objects.equals(connectionStartNodeId, node.getId())) {
+                material = nodeStartMaterial;
+            } else if (Objects.equals(connectionTargetNodeId, node.getId())) {
+                material = nodeTargetMaterial;
+            } else {
+                material = nodeMaterial;
+            }
+
+            Sphere sphere = GeometryUtils.createNodeSphere(point, nodeRadius, material);
+            sphere.setOpacity(1.0);
+            sphere.setUserData(new PickTag(PickType.NODE, node.getId()));
             nodesGroup.getChildren().add(sphere);
         }
     }
@@ -236,6 +284,11 @@ public class DomeViewer {
             case DIAGONAL -> diagonalMaterial;
             case BASE -> baseMaterial;
         };
+    }
+
+    private void softenMaterial(PhongMaterial material) {
+        material.setSpecularColor(Color.color(0.18, 0.18, 0.18));
+        material.setSpecularPower(7);
     }
 
     private Point3D computeCentroid(List<Point3D> points) {
@@ -263,9 +316,35 @@ public class DomeViewer {
             anchorRotateY = rotateY.getAngle();
             anchorPanX = pan.getX();
             anchorPanY = pan.getY();
+
+            if (event.getButton() == MouseButton.PRIMARY) {
+                Integer nodeId = findNodeId(event.getPickResult().getIntersectedNode());
+                if (nodeId != null) {
+                    connectionDragActive = true;
+                    connectionStartNodeId = nodeId;
+                    connectionTargetNodeId = null;
+                    renderModel();
+                    event.consume();
+                }
+            }
         });
 
         subScene.addEventHandler(MouseEvent.MOUSE_DRAGGED, event -> {
+            if (connectionDragActive) {
+                Integer hoveredNode = findNodeId(event.getPickResult().getIntersectedNode());
+                Integer nextTarget = null;
+                if (hoveredNode != null && !hoveredNode.equals(connectionStartNodeId)) {
+                    nextTarget = hoveredNode;
+                }
+
+                if (!Objects.equals(nextTarget, connectionTargetNodeId)) {
+                    connectionTargetNodeId = nextTarget;
+                    renderModel();
+                }
+                event.consume();
+                return;
+            }
+
             double dx = event.getSceneX() - dragAnchorX;
             double dy = event.getSceneY() - dragAnchorY;
 
@@ -278,6 +357,28 @@ public class DomeViewer {
             }
         });
 
+        subScene.addEventHandler(MouseEvent.MOUSE_RELEASED, event -> {
+            if (!connectionDragActive) {
+                return;
+            }
+
+            Integer start = connectionStartNodeId;
+            Integer target = findNodeId(event.getPickResult().getIntersectedNode());
+            if (target == null) {
+                target = connectionTargetNodeId;
+            }
+
+            connectionDragActive = false;
+            connectionStartNodeId = null;
+            connectionTargetNodeId = null;
+            renderModel();
+
+            if (start != null && target != null && !start.equals(target) && onNodeConnect != null) {
+                onNodeConnect.accept(new NodeConnectEvent(start, target));
+            }
+            event.consume();
+        });
+
         subScene.addEventHandler(ScrollEvent.SCROLL, event -> {
             double factor = event.getDeltaY() > 0 ? 0.9 : 1.1;
             double nextZ = camera.getTranslateZ() * factor;
@@ -286,7 +387,7 @@ public class DomeViewer {
         });
 
         subScene.addEventHandler(MouseEvent.MOUSE_CLICKED, event -> {
-            if (event.getButton() != MouseButton.PRIMARY || event.getClickCount() != 2) {
+            if (connectionDragActive || event.getButton() != MouseButton.PRIMARY || event.getClickCount() != 1 || !event.isShiftDown()) {
                 return;
             }
 
@@ -295,20 +396,35 @@ public class DomeViewer {
                 return;
             }
 
-            if (onBarDoubleClick != null) {
-                boolean multiSelectToggle = event.isShortcutDown() || event.isShiftDown();
-                onBarDoubleClick.accept(new BarPickEvent(barId, multiSelectToggle));
+            if (onBarSelectClick != null) {
+                onBarSelectClick.accept(new BarPickEvent(barId, true));
             }
             event.consume();
         });
     }
 
     private Integer findBarId(Node node) {
+        PickTag tag = findPickTag(node);
+        if (tag != null && tag.type() == PickType.BAR) {
+            return tag.id();
+        }
+        return null;
+    }
+
+    private Integer findNodeId(Node node) {
+        PickTag tag = findPickTag(node);
+        if (tag != null && tag.type() == PickType.NODE) {
+            return tag.id();
+        }
+        return null;
+    }
+
+    private PickTag findPickTag(Node node) {
         Node current = node;
         while (current != null) {
             Object data = current.getUserData();
-            if (data instanceof Integer id) {
-                return id;
+            if (data instanceof PickTag tag) {
+                return tag;
             }
             current = current.getParent();
         }
@@ -319,6 +435,17 @@ public class DomeViewer {
         return Collections.unmodifiableSet(highlightedBarIds);
     }
 
+    private enum PickType {
+        BAR,
+        NODE
+    }
+
+    private record PickTag(PickType type, int id) {
+    }
+
     public record BarPickEvent(int barId, boolean multiSelectToggle) {
+    }
+
+    public record NodeConnectEvent(int fromNodeId, int toNodeId) {
     }
 }

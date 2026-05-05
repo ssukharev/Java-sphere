@@ -34,7 +34,6 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
-import javafx.util.StringConverter;
 import model.Bar;
 import model.BarType;
 import model.DomeModel;
@@ -76,10 +75,6 @@ public class MainController {
     private final CheckBox showAxesCheckBox = new CheckBox("Показывать оси");
     private final CheckBox colorBarsCheckBox = new CheckBox("Цветные стержни");
 
-    private final TextField addNodeAField = new TextField();
-    private final TextField addNodeBField = new TextField();
-    private final ComboBox<BarType> addBarTypeCombo = new ComboBox<>();
-
     private final TableView<BarEditRow> barsTable = new TableView<>();
     private final ObservableList<BarEditRow> barsData = FXCollections.observableArrayList();
 
@@ -98,9 +93,6 @@ public class MainController {
         meshTypeComboBox.getItems().setAll(MeshType.values());
         meshTypeComboBox.getSelectionModel().select(MeshType.RING_TRIANGULAR);
 
-        addBarTypeCombo.getItems().setAll(BarType.values());
-        addBarTypeCombo.getSelectionModel().select(BarType.DIAGONAL);
-
         showNodesCheckBox.setSelected(true);
         showAxesCheckBox.setSelected(true);
         colorBarsCheckBox.setSelected(true);
@@ -112,7 +104,8 @@ public class MainController {
         showNodesCheckBox.selectedProperty().addListener((obs, oldValue, newValue) -> domeViewer.setShowNodes(newValue));
         showAxesCheckBox.selectedProperty().addListener((obs, oldValue, newValue) -> domeViewer.setShowAxes(newValue));
         colorBarsCheckBox.selectedProperty().addListener((obs, oldValue, newValue) -> domeViewer.setColorBars(newValue));
-        domeViewer.setOnBarDoubleClick(this::handleBarDoubleClick);
+        domeViewer.setOnBarSelectClick(this::handleBarSelectionClick);
+        domeViewer.setOnNodeConnect(this::handleNodeConnect);
 
         configureBarsTable();
 
@@ -163,6 +156,10 @@ public class MainController {
         resetCameraButton.setMaxWidth(Double.MAX_VALUE);
         resetCameraButton.setOnAction(event -> domeViewer.resetCamera());
 
+        Button removeSelectedButton = new Button("Удалить выбранные");
+        removeSelectedButton.setMaxWidth(Double.MAX_VALUE);
+        removeSelectedButton.setOnAction(event -> handleRemoveSelectedBar());
+
         Button exportCsvButton = new Button("Экспорт CSV");
         exportCsvButton.setMaxWidth(Double.MAX_VALUE);
         exportCsvButton.setOnAction(event -> handleExportCsv());
@@ -179,6 +176,7 @@ public class MainController {
                 generateButton,
                 clearButton,
                 resetCameraButton,
+                removeSelectedButton,
                 new Separator(),
                 exportCsvButton,
                 exportObjButton,
@@ -189,54 +187,12 @@ public class MainController {
         TitledPane displayOptionsPane = new TitledPane("Отображение", checkBoxBox);
         displayOptionsPane.setCollapsible(false);
 
-        TitledPane editPane = new TitledPane("Редактирование стержней", buildBarEditorPane());
-        editPane.setCollapsible(false);
-
-        TitledPane barsPane = new TitledPane("Ведомость стержней", new Label("Каждый стержень редактируется как отдельная сущность"));
-        barsPane.setCollapsible(false);
-
-        VBox panel = new VBox(12, inputGrid, displayOptionsPane, editPane, buttonsBox, barsPane);
+        VBox panel = new VBox(12, inputGrid, displayOptionsPane, buttonsBox);
         panel.setPadding(new Insets(6));
         panel.setFillWidth(true);
         VBox.setVgrow(buttonsBox, Priority.NEVER);
 
         return panel;
-    }
-
-    private VBox buildBarEditorPane() {
-        GridPane grid = new GridPane();
-        grid.setHgap(8);
-        grid.setVgap(8);
-
-        addNodeAField.setPromptText("ID узла A");
-        addNodeBField.setPromptText("ID узла B");
-
-        int row = 0;
-        addRow(grid, row++, "Узел A", addNodeAField);
-        addRow(grid, row++, "Узел B", addNodeBField);
-        addRow(grid, row, "Тип", addBarTypeCombo);
-
-        Button addButton = new Button("Добавить стержень");
-        addButton.setMaxWidth(Double.MAX_VALUE);
-        addButton.setOnAction(event -> handleAddBar());
-
-        Button removeButton = new Button("Удалить выбранные");
-        removeButton.setMaxWidth(Double.MAX_VALUE);
-        removeButton.setOnAction(event -> handleRemoveSelectedBar());
-
-        Button disableButton = new Button("Отключить выбранные");
-        disableButton.setMaxWidth(Double.MAX_VALUE);
-        disableButton.setOnAction(event -> handleDisableSelectedBar());
-
-        Button enableAllButton = new Button("Включить все");
-        enableAllButton.setMaxWidth(Double.MAX_VALUE);
-        enableAllButton.setOnAction(event -> handleEnableAllBars());
-
-        Button resetButton = new Button("Сбросить к исходной сетке");
-        resetButton.setMaxWidth(Double.MAX_VALUE);
-        resetButton.setOnAction(event -> resetEditableBarsFromSource());
-
-        return new VBox(8, grid, addButton, removeButton, disableButton, enableAllButton, resetButton);
     }
 
     private void addRow(GridPane grid, int row, String labelText, javafx.scene.Node field) {
@@ -271,25 +227,7 @@ public class MainController {
 
         TableColumn<BarEditRow, BarType> typeColumn = new TableColumn<>("Тип");
         typeColumn.setCellValueFactory(data -> data.getValue().typeProperty());
-        typeColumn.setCellFactory(ComboBoxTableCell.forTableColumn(
-                new StringConverter<>() {
-                    @Override
-                    public String toString(BarType object) {
-                        return object == null ? "" : object.getDisplayName();
-                    }
-
-                    @Override
-                    public BarType fromString(String string) {
-                        for (BarType barType : BarType.values()) {
-                            if (barType.getDisplayName().equals(string)) {
-                                return barType;
-                            }
-                        }
-                        return null;
-                    }
-                },
-                FXCollections.observableArrayList(BarType.values())
-        ));
+        typeColumn.setCellFactory(ComboBoxTableCell.forTableColumn(FXCollections.observableArrayList(BarType.values())));
         typeColumn.setOnEditCommit(event -> {
             event.getRowValue().setType(event.getNewValue());
             rebuildWorkingModelAndRefresh();
@@ -336,35 +274,6 @@ public class MainController {
         statusLabel.setText("Модель очищена");
     }
 
-    private void handleAddBar() {
-        if (!ensureSourceModelExists()) {
-            return;
-        }
-
-        try {
-            int nodeA = parseInt(addNodeAField, "Узел A");
-            int nodeB = parseInt(addNodeBField, "Узел B");
-            BarType barType = addBarTypeCombo.getValue();
-            if (barType == null) {
-                throw new IllegalArgumentException("Выберите тип стержня.");
-            }
-
-            if (containsPair(nodeA, nodeB)) {
-                throw new IllegalArgumentException("Такой стержень уже есть в ведомости.");
-            }
-
-            BarEditRow newRow = BarEditRow.create(nextCustomBarId++, nodeA, nodeB, barType, nodeMap(sourceModel));
-            registerRow(newRow);
-            barsData.add(newRow);
-            barsTable.getSelectionModel().clearSelection();
-            barsTable.getSelectionModel().select(newRow);
-
-            rebuildWorkingModelAndRefresh();
-        } catch (IllegalArgumentException ex) {
-            showValidationError(ex.getMessage());
-        }
-    }
-
     private void handleRemoveSelectedBar() {
         List<BarEditRow> selectedRows = new ArrayList<>(barsTable.getSelectionModel().getSelectedItems());
         if (selectedRows.isEmpty()) {
@@ -382,32 +291,34 @@ public class MainController {
         });
     }
 
-    private void handleDisableSelectedBar() {
-        List<BarEditRow> selectedRows = new ArrayList<>(barsTable.getSelectionModel().getSelectedItems());
-        if (selectedRows.isEmpty()) {
-            showInfo("Редактирование", "Выберите стержни в таблице.");
+    private void handleNodeConnect(DomeViewer.NodeConnectEvent event) {
+        if (event == null || !ensureSourceModelExists()) {
             return;
         }
 
-        muteRowEvents = true;
-        for (BarEditRow row : selectedRows) {
-            row.setActive(false);
-        }
-        muteRowEvents = false;
-        rebuildWorkingModelAndRefresh();
-    }
+        try {
+            if (containsPair(event.fromNodeId(), event.toNodeId())) {
+                statusLabel.setText("Стержень уже существует между узлами " + event.fromNodeId() + " и " + event.toNodeId());
+                return;
+            }
 
-    private void handleEnableAllBars() {
-        if (barsData.isEmpty()) {
-            return;
+            BarEditRow newRow = BarEditRow.create(
+                    nextCustomBarId++,
+                    event.fromNodeId(),
+                    event.toNodeId(),
+                    BarType.DIAGONAL,
+                    nodeMap(sourceModel)
+            );
+            registerRow(newRow);
+            barsData.add(newRow);
+            barsTable.getSelectionModel().clearSelection();
+            barsTable.getSelectionModel().select(newRow);
+            barsTable.scrollTo(newRow);
+            rebuildWorkingModelAndRefresh();
+            statusLabel.setText("Добавлен стержень между узлами " + event.fromNodeId() + " и " + event.toNodeId());
+        } catch (IllegalArgumentException ex) {
+            showValidationError(ex.getMessage());
         }
-
-        muteRowEvents = true;
-        for (BarEditRow row : barsData) {
-            row.setActive(true);
-        }
-        muteRowEvents = false;
-        rebuildWorkingModelAndRefresh();
     }
 
     private void resetEditableBarsFromSource() {
@@ -442,7 +353,7 @@ public class MainController {
         });
     }
 
-    private void handleBarDoubleClick(DomeViewer.BarPickEvent event) {
+    private void handleBarSelectionClick(DomeViewer.BarPickEvent event) {
         if (event == null) {
             return;
         }
