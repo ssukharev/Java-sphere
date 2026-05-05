@@ -4,9 +4,11 @@ import export.CsvExporter;
 import export.ObjExporter;
 import export.StlExporter;
 import generator.DomeGenerator;
+import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
@@ -18,28 +20,40 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
+import javafx.scene.control.SelectionMode;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
+import javafx.scene.control.cell.CheckBoxTableCell;
+import javafx.scene.control.cell.ComboBoxTableCell;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.util.StringConverter;
 import model.Bar;
+import model.BarType;
 import model.DomeModel;
 import model.DomeParameters;
 import model.MeshType;
+import model.Node3D;
 import view.DomeViewer;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.Set;
 
 public class MainController {
     private final Stage stage;
@@ -62,12 +76,19 @@ public class MainController {
     private final CheckBox showAxesCheckBox = new CheckBox("Показывать оси");
     private final CheckBox colorBarsCheckBox = new CheckBox("Цветные стержни");
 
-    private final TableView<Bar> barsTable = new TableView<>();
-    private final ObservableList<Bar> barsData = FXCollections.observableArrayList();
+    private final TextField addNodeAField = new TextField();
+    private final TextField addNodeBField = new TextField();
+    private final ComboBox<BarType> addBarTypeCombo = new ComboBox<>();
+
+    private final TableView<BarEditRow> barsTable = new TableView<>();
+    private final ObservableList<BarEditRow> barsData = FXCollections.observableArrayList();
 
     private final Label statusLabel = new Label("Модель не сформирована");
 
-    private DomeModel currentModel;
+    private DomeModel sourceModel;
+    private DomeModel workingModel;
+    private int nextCustomBarId = 1;
+    private boolean muteRowEvents;
 
     public MainController(Stage stage) {
         this.stage = stage;
@@ -76,6 +97,9 @@ public class MainController {
     public Parent createView() {
         meshTypeComboBox.getItems().setAll(MeshType.values());
         meshTypeComboBox.getSelectionModel().select(MeshType.RING_TRIANGULAR);
+
+        addBarTypeCombo.getItems().setAll(BarType.values());
+        addBarTypeCombo.getSelectionModel().select(BarType.DIAGONAL);
 
         showNodesCheckBox.setSelected(true);
         showAxesCheckBox.setSelected(true);
@@ -88,6 +112,7 @@ public class MainController {
         showNodesCheckBox.selectedProperty().addListener((obs, oldValue, newValue) -> domeViewer.setShowNodes(newValue));
         showAxesCheckBox.selectedProperty().addListener((obs, oldValue, newValue) -> domeViewer.setShowAxes(newValue));
         colorBarsCheckBox.selectedProperty().addListener((obs, oldValue, newValue) -> domeViewer.setColorBars(newValue));
+        domeViewer.setOnBarDoubleClick(this::handleBarDoubleClick);
 
         configureBarsTable();
 
@@ -96,13 +121,13 @@ public class MainController {
 
         ScrollPane leftPanel = new ScrollPane(buildLeftPanel());
         leftPanel.setFitToWidth(true);
-        leftPanel.setPrefWidth(330);
-        leftPanel.setMinWidth(300);
+        leftPanel.setPrefWidth(360);
+        leftPanel.setMinWidth(330);
 
         SplitPane rightPanel = new SplitPane();
         rightPanel.setOrientation(Orientation.VERTICAL);
         rightPanel.getItems().addAll(domeViewer.getView(), barsTable);
-        rightPanel.setDividerPositions(0.72);
+        rightPanel.setDividerPositions(0.7);
 
         root.setLeft(leftPanel);
         root.setCenter(rightPanel);
@@ -164,15 +189,54 @@ public class MainController {
         TitledPane displayOptionsPane = new TitledPane("Отображение", checkBoxBox);
         displayOptionsPane.setCollapsible(false);
 
-        TitledPane barsPane = new TitledPane("Ведомость стержней", new Label("Таблица справа"));
+        TitledPane editPane = new TitledPane("Редактирование стержней", buildBarEditorPane());
+        editPane.setCollapsible(false);
+
+        TitledPane barsPane = new TitledPane("Ведомость стержней", new Label("Каждый стержень редактируется как отдельная сущность"));
         barsPane.setCollapsible(false);
 
-        VBox panel = new VBox(12, inputGrid, displayOptionsPane, buttonsBox, barsPane);
+        VBox panel = new VBox(12, inputGrid, displayOptionsPane, editPane, buttonsBox, barsPane);
         panel.setPadding(new Insets(6));
         panel.setFillWidth(true);
         VBox.setVgrow(buttonsBox, Priority.NEVER);
 
         return panel;
+    }
+
+    private VBox buildBarEditorPane() {
+        GridPane grid = new GridPane();
+        grid.setHgap(8);
+        grid.setVgap(8);
+
+        addNodeAField.setPromptText("ID узла A");
+        addNodeBField.setPromptText("ID узла B");
+
+        int row = 0;
+        addRow(grid, row++, "Узел A", addNodeAField);
+        addRow(grid, row++, "Узел B", addNodeBField);
+        addRow(grid, row, "Тип", addBarTypeCombo);
+
+        Button addButton = new Button("Добавить стержень");
+        addButton.setMaxWidth(Double.MAX_VALUE);
+        addButton.setOnAction(event -> handleAddBar());
+
+        Button removeButton = new Button("Удалить выбранные");
+        removeButton.setMaxWidth(Double.MAX_VALUE);
+        removeButton.setOnAction(event -> handleRemoveSelectedBar());
+
+        Button disableButton = new Button("Отключить выбранные");
+        disableButton.setMaxWidth(Double.MAX_VALUE);
+        disableButton.setOnAction(event -> handleDisableSelectedBar());
+
+        Button enableAllButton = new Button("Включить все");
+        enableAllButton.setMaxWidth(Double.MAX_VALUE);
+        enableAllButton.setOnAction(event -> handleEnableAllBars());
+
+        Button resetButton = new Button("Сбросить к исходной сетке");
+        resetButton.setMaxWidth(Double.MAX_VALUE);
+        resetButton.setOnAction(event -> resetEditableBarsFromSource());
+
+        return new VBox(8, grid, addButton, removeButton, disableButton, enableAllButton, resetButton);
     }
 
     private void addRow(GridPane grid, int row, String labelText, javafx.scene.Node field) {
@@ -186,30 +250,64 @@ public class MainController {
     }
 
     private void configureBarsTable() {
-        TableColumn<Bar, Integer> idColumn = new TableColumn<>("№");
+        barsTable.setEditable(true);
+        barsTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+
+        TableColumn<BarEditRow, Integer> idColumn = new TableColumn<>("№");
         idColumn.setCellValueFactory(data -> new ReadOnlyObjectWrapper<>(data.getValue().getId()));
-        idColumn.setPrefWidth(70);
+        idColumn.setPrefWidth(65);
 
-        TableColumn<Bar, Integer> nodeAColumn = new TableColumn<>("Узел A");
+        TableColumn<BarEditRow, Integer> nodeAColumn = new TableColumn<>("Узел A");
         nodeAColumn.setCellValueFactory(data -> new ReadOnlyObjectWrapper<>(data.getValue().getNodeA()));
-        nodeAColumn.setPrefWidth(90);
+        nodeAColumn.setPrefWidth(85);
 
-        TableColumn<Bar, Integer> nodeBColumn = new TableColumn<>("Узел B");
+        TableColumn<BarEditRow, Integer> nodeBColumn = new TableColumn<>("Узел B");
         nodeBColumn.setCellValueFactory(data -> new ReadOnlyObjectWrapper<>(data.getValue().getNodeB()));
-        nodeBColumn.setPrefWidth(90);
+        nodeBColumn.setPrefWidth(85);
 
-        TableColumn<Bar, String> lengthColumn = new TableColumn<>("Длина");
+        TableColumn<BarEditRow, String> lengthColumn = new TableColumn<>("Длина");
         lengthColumn.setCellValueFactory(data -> new ReadOnlyStringWrapper(format(data.getValue().getLength())));
-        lengthColumn.setPrefWidth(120);
+        lengthColumn.setPrefWidth(110);
 
-        TableColumn<Bar, String> typeColumn = new TableColumn<>("Тип");
-        typeColumn.setCellValueFactory(data -> new ReadOnlyStringWrapper(data.getValue().getType().getDisplayName()));
-        typeColumn.setPrefWidth(150);
+        TableColumn<BarEditRow, BarType> typeColumn = new TableColumn<>("Тип");
+        typeColumn.setCellValueFactory(data -> data.getValue().typeProperty());
+        typeColumn.setCellFactory(ComboBoxTableCell.forTableColumn(
+                new StringConverter<>() {
+                    @Override
+                    public String toString(BarType object) {
+                        return object == null ? "" : object.getDisplayName();
+                    }
 
-        barsTable.getColumns().addAll(idColumn, nodeAColumn, nodeBColumn, lengthColumn, typeColumn);
+                    @Override
+                    public BarType fromString(String string) {
+                        for (BarType barType : BarType.values()) {
+                            if (barType.getDisplayName().equals(string)) {
+                                return barType;
+                            }
+                        }
+                        return null;
+                    }
+                },
+                FXCollections.observableArrayList(BarType.values())
+        ));
+        typeColumn.setOnEditCommit(event -> {
+            event.getRowValue().setType(event.getNewValue());
+            rebuildWorkingModelAndRefresh();
+        });
+        typeColumn.setPrefWidth(140);
+
+        TableColumn<BarEditRow, Boolean> activeColumn = new TableColumn<>("Активен");
+        activeColumn.setCellValueFactory(data -> data.getValue().activeProperty());
+        activeColumn.setCellFactory(CheckBoxTableCell.forTableColumn(activeColumn));
+        activeColumn.setEditable(true);
+        activeColumn.setPrefWidth(90);
+
+        barsTable.getColumns().addAll(idColumn, nodeAColumn, nodeBColumn, lengthColumn, typeColumn, activeColumn);
         barsTable.setItems(barsData);
         barsTable.setPlaceholder(new Label("Нет данных. Нажмите «Сформировать»."));
         barsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+
+        barsTable.getSelectionModel().getSelectedItems().addListener((ListChangeListener<BarEditRow>) change -> syncViewerSelectionFromTable());
     }
 
     private void handleGenerate() {
@@ -221,23 +319,8 @@ public class MainController {
                 return;
             }
 
-            currentModel = domeGenerator.generate(parameters);
-            barsData.setAll(currentModel.getBars());
-            domeViewer.displayModel(
-                    currentModel,
-                    parameters.getVisualThickness(),
-                    showNodesCheckBox.isSelected(),
-                    colorBarsCheckBox.isSelected()
-            );
-            domeViewer.setShowAxes(showAxesCheckBox.isSelected());
-
-            statusLabel.setText(String.format(
-                    Locale.forLanguageTag("ru-RU"),
-                    "Сформировано: узлов %d, стержней %d, граней %d",
-                    currentModel.getNodes().size(),
-                    currentModel.getBars().size(),
-                    currentModel.getFaces().size()
-            ));
+            sourceModel = domeGenerator.generate(parameters);
+            resetEditableBarsFromSource();
         } catch (IllegalArgumentException ex) {
             showValidationError(ex.getMessage());
         } catch (Exception ex) {
@@ -246,14 +329,224 @@ public class MainController {
     }
 
     private void handleClear() {
-        currentModel = null;
+        sourceModel = null;
+        workingModel = null;
         barsData.clear();
         domeViewer.clearModel();
         statusLabel.setText("Модель очищена");
     }
 
+    private void handleAddBar() {
+        if (!ensureSourceModelExists()) {
+            return;
+        }
+
+        try {
+            int nodeA = parseInt(addNodeAField, "Узел A");
+            int nodeB = parseInt(addNodeBField, "Узел B");
+            BarType barType = addBarTypeCombo.getValue();
+            if (barType == null) {
+                throw new IllegalArgumentException("Выберите тип стержня.");
+            }
+
+            if (containsPair(nodeA, nodeB)) {
+                throw new IllegalArgumentException("Такой стержень уже есть в ведомости.");
+            }
+
+            BarEditRow newRow = BarEditRow.create(nextCustomBarId++, nodeA, nodeB, barType, nodeMap(sourceModel));
+            registerRow(newRow);
+            barsData.add(newRow);
+            barsTable.getSelectionModel().clearSelection();
+            barsTable.getSelectionModel().select(newRow);
+
+            rebuildWorkingModelAndRefresh();
+        } catch (IllegalArgumentException ex) {
+            showValidationError(ex.getMessage());
+        }
+    }
+
+    private void handleRemoveSelectedBar() {
+        List<BarEditRow> selectedRows = new ArrayList<>(barsTable.getSelectionModel().getSelectedItems());
+        if (selectedRows.isEmpty()) {
+            showInfo("Редактирование", "Выберите стержни в таблице.");
+            return;
+        }
+
+        barsData.removeAll(selectedRows);
+        rebuildWorkingModelAndRefresh();
+        // JavaFX TableView по умолчанию выбирает соседнюю строку после удаления.
+        // Очищаем selection после обновления списка, чтобы не было авто-выбора.
+        Platform.runLater(() -> {
+            barsTable.getSelectionModel().clearSelection();
+            syncViewerSelectionFromTable();
+        });
+    }
+
+    private void handleDisableSelectedBar() {
+        List<BarEditRow> selectedRows = new ArrayList<>(barsTable.getSelectionModel().getSelectedItems());
+        if (selectedRows.isEmpty()) {
+            showInfo("Редактирование", "Выберите стержни в таблице.");
+            return;
+        }
+
+        muteRowEvents = true;
+        for (BarEditRow row : selectedRows) {
+            row.setActive(false);
+        }
+        muteRowEvents = false;
+        rebuildWorkingModelAndRefresh();
+    }
+
+    private void handleEnableAllBars() {
+        if (barsData.isEmpty()) {
+            return;
+        }
+
+        muteRowEvents = true;
+        for (BarEditRow row : barsData) {
+            row.setActive(true);
+        }
+        muteRowEvents = false;
+        rebuildWorkingModelAndRefresh();
+    }
+
+    private void resetEditableBarsFromSource() {
+        if (!ensureSourceModelExists()) {
+            return;
+        }
+
+        muteRowEvents = true;
+        barsData.clear();
+        for (Bar bar : sourceModel.getBars()) {
+            BarEditRow row = new BarEditRow(bar);
+            registerRow(row);
+            barsData.add(row);
+        }
+        muteRowEvents = false;
+
+        nextCustomBarId = sourceModel.getBars().stream().mapToInt(Bar::getId).max().orElse(0) + 1;
+        rebuildWorkingModelAndRefresh();
+    }
+
+    private void registerRow(BarEditRow row) {
+        row.activeProperty().addListener((obs, oldValue, newValue) -> {
+            if (!muteRowEvents) {
+                rebuildWorkingModelAndRefresh();
+            }
+        });
+
+        row.typeProperty().addListener((obs, oldValue, newValue) -> {
+            if (!muteRowEvents) {
+                rebuildWorkingModelAndRefresh();
+            }
+        });
+    }
+
+    private void handleBarDoubleClick(DomeViewer.BarPickEvent event) {
+        if (event == null) {
+            return;
+        }
+
+        int barId = event.barId();
+        boolean multiToggle = event.multiSelectToggle();
+        for (int i = 0; i < barsData.size(); i++) {
+            if (barsData.get(i).getId() == barId) {
+                if (!multiToggle) {
+                    barsTable.getSelectionModel().clearSelection();
+                    barsTable.getSelectionModel().select(i);
+                } else if (barsTable.getSelectionModel().isSelected(i)) {
+                    barsTable.getSelectionModel().clearSelection(i);
+                } else {
+                    barsTable.getSelectionModel().select(i);
+                }
+                barsTable.scrollTo(i);
+                return;
+            }
+        }
+    }
+
+    private void syncViewerSelectionFromTable() {
+        Set<Integer> selectedIds = barsTable.getSelectionModel().getSelectedItems().stream()
+                .map(BarEditRow::getId)
+                .collect(Collectors.toSet());
+        domeViewer.setHighlightedBars(selectedIds);
+    }
+
+    private void rebuildWorkingModelAndRefresh() {
+        if (sourceModel == null) {
+            return;
+        }
+
+        List<Bar> activeBars = new ArrayList<>();
+        Set<Long> uniquePairs = new HashSet<>();
+
+        for (BarEditRow row : barsData) {
+            if (!row.isActive()) {
+                continue;
+            }
+
+            Bar bar = row.toBar();
+            long key = pairKey(bar.getNodeA(), bar.getNodeB());
+            if (uniquePairs.contains(key)) {
+                continue;
+            }
+
+            uniquePairs.add(key);
+            activeBars.add(bar);
+        }
+
+        workingModel = new DomeModel(
+                sourceModel.getParameters(),
+                sourceModel.getNodes(),
+                activeBars,
+                sourceModel.getFaces()
+        );
+
+        domeViewer.displayModel(
+                workingModel,
+                sourceModel.getParameters().getVisualThickness(),
+                showNodesCheckBox.isSelected(),
+                colorBarsCheckBox.isSelected()
+        );
+        domeViewer.setShowAxes(showAxesCheckBox.isSelected());
+        syncViewerSelectionFromTable();
+
+        long activeCount = barsData.stream().filter(BarEditRow::isActive).count();
+        statusLabel.setText(String.format(
+                Locale.forLanguageTag("ru-RU"),
+                "Узлов: %d, активных стержней: %d из %d",
+                sourceModel.getNodes().size(),
+                activeCount,
+                barsData.size()
+        ));
+    }
+
+    private boolean containsPair(int nodeA, int nodeB) {
+        long key = pairKey(nodeA, nodeB);
+        for (BarEditRow row : barsData) {
+            if (pairKey(row.getNodeA(), row.getNodeB()) == key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private long pairKey(int a, int b) {
+        int min = Math.min(a, b);
+        int max = Math.max(a, b);
+        return (((long) min) << 32) | (max & 0xffffffffL);
+    }
+
+    private Map<Integer, Node3D> nodeMap(DomeModel model) {
+        Map<Integer, Node3D> map = new HashMap<>();
+        for (Node3D node : model.getNodes()) {
+            map.put(node.getId(), node);
+        }
+        return map;
+    }
+
     private void handleExportCsv() {
-        if (!ensureModelExists()) {
+        if (!ensureWorkingModelExists()) {
             return;
         }
 
@@ -263,7 +556,7 @@ public class MainController {
         }
 
         try {
-            csvExporter.export(file.toPath(), currentModel);
+            csvExporter.export(file.toPath(), workingModel);
             statusLabel.setText("CSV экспортирован: " + file.getAbsolutePath());
         } catch (IOException ex) {
             showError("Ошибка экспорта CSV", ex.getMessage());
@@ -271,7 +564,7 @@ public class MainController {
     }
 
     private void handleExportObj() {
-        if (!ensureModelExists()) {
+        if (!ensureWorkingModelExists()) {
             return;
         }
 
@@ -281,7 +574,7 @@ public class MainController {
         }
 
         try {
-            objExporter.export(file.toPath(), currentModel);
+            objExporter.export(file.toPath(), workingModel);
             statusLabel.setText("OBJ экспортирован: " + file.getAbsolutePath());
         } catch (IOException ex) {
             showError("Ошибка экспорта OBJ", ex.getMessage());
@@ -289,7 +582,7 @@ public class MainController {
     }
 
     private void handleExportStl() {
-        if (!ensureModelExists()) {
+        if (!ensureWorkingModelExists()) {
             return;
         }
 
@@ -299,7 +592,7 @@ public class MainController {
         }
 
         try {
-            stlExporter.export(file.toPath(), currentModel);
+            stlExporter.export(file.toPath(), workingModel);
             statusLabel.setText("STL экспортирован: " + file.getAbsolutePath());
         } catch (UnsupportedOperationException ex) {
             showInfo("STL", ex.getMessage());
@@ -357,8 +650,16 @@ public class MainController {
         }
     }
 
-    private boolean ensureModelExists() {
-        if (currentModel == null) {
+    private boolean ensureSourceModelExists() {
+        if (sourceModel == null) {
+            showInfo("Нет модели", "Сначала нажмите «Сформировать».");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean ensureWorkingModelExists() {
+        if (workingModel == null) {
             showInfo("Нет модели", "Сначала нажмите «Сформировать».");
             return false;
         }

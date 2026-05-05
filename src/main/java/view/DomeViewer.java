@@ -3,11 +3,13 @@ package view;
 import javafx.geometry.Point3D;
 import javafx.scene.AmbientLight;
 import javafx.scene.Group;
+import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.PerspectiveCamera;
 import javafx.scene.PointLight;
 import javafx.scene.SceneAntialiasing;
 import javafx.scene.SubScene;
+import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.StackPane;
@@ -23,9 +25,13 @@ import model.BarType;
 import model.DomeModel;
 import model.Node3D;
 
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Consumer;
 
 public class DomeViewer {
     private static final double MIN_CAMERA_Z = -10000;
@@ -52,10 +58,13 @@ public class DomeViewer {
     private final PhongMaterial radialMaterial = new PhongMaterial(Color.web("#27ae60"));
     private final PhongMaterial diagonalMaterial = new PhongMaterial(Color.web("#2980b9"));
     private final PhongMaterial baseMaterial = new PhongMaterial(Color.web("#c0392b"));
+    private final PhongMaterial selectedBarMaterial = new PhongMaterial(Color.web("#f1c40f"));
 
     private DomeModel currentModel;
     private double currentBarRadius = 0.12;
     private boolean colorBars = true;
+    private final Set<Integer> highlightedBarIds = new HashSet<>();
+    private Consumer<BarPickEvent> onBarDoubleClick;
 
     private double dragAnchorX;
     private double dragAnchorY;
@@ -107,6 +116,7 @@ public class DomeViewer {
 
     public void clearModel() {
         currentModel = null;
+        highlightedBarIds.clear();
         barsGroup.getChildren().clear();
         nodesGroup.getChildren().clear();
         scale.setX(1);
@@ -129,12 +139,26 @@ public class DomeViewer {
         }
     }
 
+    public void setHighlightedBars(Set<Integer> barIds) {
+        highlightedBarIds.clear();
+        if (barIds != null) {
+            highlightedBarIds.addAll(barIds);
+        }
+        if (currentModel != null) {
+            renderModel();
+        }
+    }
+
     public void resetCamera() {
         rotateX.setAngle(-25);
         rotateY.setAngle(-35);
         pan.setX(0);
         pan.setY(0);
         camera.setTranslateZ(-900);
+    }
+
+    public void setOnBarDoubleClick(Consumer<BarPickEvent> onBarDoubleClick) {
+        this.onBarDoubleClick = onBarDoubleClick;
     }
 
     private void renderModel() {
@@ -168,6 +192,7 @@ public class DomeViewer {
         scale.setY(scaleFactor);
         scale.setZ(scaleFactor);
 
+        Set<Integer> connectedNodeIds = new HashSet<>();
         for (Bar bar : currentModel.getBars()) {
             Point3D from = centeredPoints.get(bar.getNodeA());
             Point3D to = centeredPoints.get(bar.getNodeB());
@@ -175,15 +200,26 @@ public class DomeViewer {
                 continue;
             }
 
-            PhongMaterial material = colorBars ? materialForType(bar.getType()) : defaultBarMaterial;
-            Cylinder cylinder = GeometryUtils.createConnectionCylinder(from, to, currentBarRadius, material);
+            connectedNodeIds.add(bar.getNodeA());
+            connectedNodeIds.add(bar.getNodeB());
+
+            boolean selected = highlightedBarIds.contains(bar.getId());
+            PhongMaterial material = selected
+                    ? selectedBarMaterial
+                    : (colorBars ? materialForType(bar.getType()) : defaultBarMaterial);
+            double radius = selected ? currentBarRadius * 1.35 : currentBarRadius;
+            Cylinder cylinder = GeometryUtils.createConnectionCylinder(from, to, radius, material);
             if (cylinder != null) {
+                cylinder.setUserData(bar.getId());
                 barsGroup.getChildren().add(cylinder);
             }
         }
 
         double nodeRadius = Math.max(currentBarRadius * 1.8, currentBarRadius + 0.01);
         for (Node3D node : currentModel.getNodes()) {
+            if (!connectedNodeIds.contains(node.getId())) {
+                continue;
+            }
             Point3D point = centeredPoints.get(node.getId());
             if (point == null) {
                 continue;
@@ -248,5 +284,41 @@ public class DomeViewer {
             nextZ = Math.max(MIN_CAMERA_Z, Math.min(MAX_CAMERA_Z, nextZ));
             camera.setTranslateZ(nextZ);
         });
+
+        subScene.addEventHandler(MouseEvent.MOUSE_CLICKED, event -> {
+            if (event.getButton() != MouseButton.PRIMARY || event.getClickCount() != 2) {
+                return;
+            }
+
+            Integer barId = findBarId(event.getPickResult().getIntersectedNode());
+            if (barId == null) {
+                return;
+            }
+
+            if (onBarDoubleClick != null) {
+                boolean multiSelectToggle = event.isShortcutDown() || event.isShiftDown();
+                onBarDoubleClick.accept(new BarPickEvent(barId, multiSelectToggle));
+            }
+            event.consume();
+        });
+    }
+
+    private Integer findBarId(Node node) {
+        Node current = node;
+        while (current != null) {
+            Object data = current.getUserData();
+            if (data instanceof Integer id) {
+                return id;
+            }
+            current = current.getParent();
+        }
+        return null;
+    }
+
+    public Set<Integer> getHighlightedBarIds() {
+        return Collections.unmodifiableSet(highlightedBarIds);
+    }
+
+    public record BarPickEvent(int barId, boolean multiSelectToggle) {
     }
 }
